@@ -1,1 +1,21 @@
-
+name: Build Windows installer
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - run: pyinstaller --noconfirm --windowed --name GeminiAssistant --collect-all vosk --collect-all sounddevice --hidden-import pyttsx3.drivers.sapi5 --hidden-import keyring.backends.Windows gemini_assistant.py
+      - run: choco install innosetup -y
+      - run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GeminiAssistantSetup
+          path: output/GeminiAssistantSetup.exe
