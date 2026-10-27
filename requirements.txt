@@ -1,0 +1,12 @@
+google-genai
+mss
+pillow
+PyQt6
+keyboard
+pyautogui
+pyperclip
+sounddevice
+pyttsx3
+vosk
+keyring
+pyinstaller
