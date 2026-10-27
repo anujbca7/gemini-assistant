@@ -38,8 +38,7 @@ except Exception:
     pyttsx3 = None
 
 APP = "GeminiAssistant"
-MODELS = ["gemini-2.5-flash", "gemini-2.5-pro"]
-WAKE_PHRASE = "hey gemini"
+MODELS = ["gemini-3.8-flash", "gemini-3.1-pro-preview"]  # first one = default
 VOSK_NAME = "vosk-model-small-en-us-0.15"
 VOSK_URL = f"https://alphacephei.com/vosk/models/{VOSK_NAME}.zip"
 PASTE_KEY = "command" if sys.platform == "darwin" else "ctrl"
@@ -50,11 +49,13 @@ CFG_DIR = (Path(os.environ["APPDATA"]) / APP) if sys.platform == "win32" else Pa
 CFG_DIR.mkdir(parents=True, exist_ok=True)
 CFG_FILE = CFG_DIR / "config.json"
 cfg = {"model": MODELS[0], "hotkey": "ctrl+space", "voice_hotkey": "ctrl+alt+space",
-       "wake_word": True, "autostart": True, "api_key": ""}
+       "wake_word": True, "wake_phrase": "hey gemini", "autostart": True, "api_key": ""}
 try:
     cfg.update(json.loads(CFG_FILE.read_text()))
 except Exception:
     pass
+if cfg.get("model") not in MODELS:  # old/removed model saved in config -> reset
+    cfg["model"] = MODELS[0]
 
 
 def save_cfg():
@@ -161,6 +162,8 @@ class VoiceEngine(QObject):
         self.recording = False
         self.force_stop = False
         self.wake_enabled = False
+        self.wake_phrase = "hey gemini"
+        self.reload = False
         self.frames, self.heard, self.quiet, self.t0 = [], False, 0, 0.0
 
     def begin(self):
@@ -191,7 +194,7 @@ class VoiceEngine(QObject):
                 f.extractall(CFG_DIR)
             z.unlink()
         vosk.SetLogLevel(-1)
-        return vosk.KaldiRecognizer(vosk.Model(str(path)), 16000, json.dumps([WAKE_PHRASE, "[unk]"]))
+        return vosk.KaldiRecognizer(vosk.Model(str(path)), 16000, json.dumps([self.wake_phrase, "[unk]"]))
 
     def _run(self):
         rec, failed = None, False
@@ -203,6 +206,8 @@ class VoiceEngine(QObject):
                     if self.recording:
                         self._record(chunk)
                         continue
+                    if self.reload:
+                        rec, failed, self.reload = None, False, False
                     if self.wake_enabled and rec is None and not failed:
                         try:
                             rec = self._load_recognizer()
@@ -214,7 +219,7 @@ class VoiceEngine(QObject):
                             text = json.loads(rec.Result()).get("text", "")
                         else:
                             text = json.loads(rec.PartialResult()).get("partial", "")
-                        if WAKE_PHRASE in text:
+                        if self.wake_phrase in text:
                             rec.Reset()
                             self.start_recording()
                             self.wake.emit()
@@ -346,14 +351,15 @@ class Settings(QDialog):
         self.key.setPlaceholderText("Paste key from aistudio.google.com/apikey")
         self.hk = QLineEdit(cfg["hotkey"])
         self.vhk = QLineEdit(cfg["voice_hotkey"])
-        self.wake = QCheckBox('Wake word: say "Hey Gemini"'); self.wake.setChecked(cfg["wake_word"])
+        self.wake = QCheckBox("Enable wake word (hands-free)"); self.wake.setChecked(cfg["wake_word"])
+        self.phrase = QLineEdit(cfg["wake_phrase"])
         self.auto = QCheckBox("Start automatically when I log in"); self.auto.setChecked(cfg["autostart"])
         ok = QPushButton("Save"); ok.clicked.connect(self.accept)
         f = QFormLayout(self)
         f.addRow("Gemini API key", self.key)
         f.addRow("Open hotkey", self.hk)
         f.addRow("Voice hotkey", self.vhk)
-        f.addRow(self.wake); f.addRow(self.auto); f.addRow(ok)
+        f.addRow(self.wake); f.addRow("Wake phrase", self.phrase); f.addRow(self.auto); f.addRow(ok)
 
 
 class Assistant(QWidget):
@@ -401,7 +407,7 @@ class Assistant(QWidget):
         engine.audio_ready.connect(lambda b: self.ask("", audio=b))
         engine.cancelled.connect(lambda: self.out.setMarkdown("Didn't hear anything. Try again."))
         engine.status.connect(lambda s: self.out.setMarkdown(s))
-        self.out.setMarkdown('Ready. Ask about your screen, or say **"Hey Gemini"**.')
+        self.out.setMarkdown(f'Ready. Ask about your screen, or say **"{cfg["wake_phrase"]}"**.')
 
     def keyPressEvent(self, e):
         if e.key() == Qt.Key.Key_Escape:
@@ -532,6 +538,7 @@ def main():
     bridge, engine = Bridge(), VoiceEngine()
     win = Assistant(bridge, engine)
     engine.wake_enabled = cfg["wake_word"]
+    engine.wake_phrase = cfg["wake_phrase"]
     engine.begin()
 
     handles = []
@@ -555,10 +562,13 @@ def main():
             set_key(d.key.text().strip())
             cfg.update(hotkey=d.hk.text().strip() or "ctrl+space",
                        voice_hotkey=d.vhk.text().strip() or "ctrl+alt+space",
-                       wake_word=d.wake.isChecked(), autostart=d.auto.isChecked())
+                       wake_word=d.wake.isChecked(),
+                       wake_phrase=(d.phrase.text().strip().lower() or "hey gemini"), autostart=d.auto.isChecked())
             save_cfg()
             make_client()
             engine.wake_enabled = cfg["wake_word"]
+            engine.wake_phrase = cfg["wake_phrase"]
+            engine.reload = True
             register_hotkeys()
             try:
                 set_autostart(cfg["autostart"])
@@ -580,7 +590,7 @@ def main():
         open_settings()
     else:
         tray.showMessage("Gemini Assistant is running",
-                         f'Press {cfg["hotkey"]} or say "Hey Gemini".')
+                         f'Press {cfg["hotkey"]} or say "{cfg["wake_phrase"]}".')
     if cfg["autostart"]:
         try:
             set_autostart(True)
